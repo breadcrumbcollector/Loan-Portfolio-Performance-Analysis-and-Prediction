@@ -1,0 +1,283 @@
+use loan_tape; -- raw data
+set SQL_SAFE_UPDATES = 0;
+
+-- initial inspection ------
+
+-- product A ----
+-- data overview --
+describe loantape1;
+select * from loantape1 limit 5;
+-- change data type --
+-- change date from text type to date type
+UPDATE loantape1
+SET DateKey = STR_TO_DATE(NULLIF(DateKey, ''), '%m/%d/%y'),
+    OriginationDate = STR_TO_DATE(NULLIF(OriginationDate, ''), '%m/%d/%y'),
+    `Maturity Date` = IFNULL(STR_TO_DATE(NULLIF(`Maturity Date`, ''), '%m/%d/%y'), `Maturity Date`),
+    ChargeOffDate = STR_TO_DATE(NULLIF(ChargeOffDate, ''), '%m/%d/%y');
+
+-- change loan amount, outstanding principle from text to numeric
+update loantape1 set LoanAmount = CAST(REPLACE(REPLACE(LoanAmount, '$', ''), ',', '') AS UNSIGNED), 
+    OutstandingPrincipalBalance = CAST(REPLACE(REPLACE(OutstandingPrincipalBalance, '$', ''), ',', '') AS DECIMAL(10,2)); -- change currency to just number
+
+-- check data for errors --
+-- seems like most loan id in Product A has same type of loans, double check that
+select *
+from loantape1 A
+where LoanID IN (SELECT LoanID
+        from loantape1
+        GROUP BY LoanID
+        HAVING COUNT(DISTINCT OriginationDate) != 1
+            OR COUNT(DISTINCT `Maturity Date`) != 1
+            OR COUNT(DISTINCT LoanAmount) != 1
+            OR COUNT(DISTINCT InterestRate) != 1
+            OR COUNT(DISTINCT LoanTermMonths) != 1)
+ORDER BY LoanID , DateKey;-- no obvious pattern here
+
+-- make sure DateKey are all the same to or after OriginationDate
+select * from loantape1 A
+where DateKey in 
+(select LoanID from loantape1
+ where DateKey < OriginationDate); -- null
+
+-- check status
+select distinct `Status`
+from loantape1 A; -- ' Current', 'Current'
+-- replace ' Current' with 'Current'
+update loantape1 
+set `Status` = replace(`Status`, ' Current', 'Current')
+where `Status` like '% Current';
+
+-- FICO
+select min(FICO), max(FICO), avg(FICO)
+from loantape1;
+
+-- DaysPastDue
+select min(DaysPastDue), max(DaysPastDue), avg(DaysPastDue)
+from loantape1;
+
+--  ChargeOffAmount
+select min(ChargeOffAmount), max(ChargeOffAmount), avg(ChargeOffAmount)
+from loantape1
+where ChargeOffAmount is not null;
+
+-- relationship
+-- check if maturity - origination should= term month
+select distinct (`Maturity Date` - OriginationDate - LoanTermMonths)
+from loantape1; -- not zero
+SELECT distinct (TIMESTAMPDIFF(MONTH, OriginationDate, `Maturity Date`) - LoanTermMonths)
+FROM loantape1; -- not zero
+select distinct TIMESTAMPDIFF(MONTH, orig_date, maturity_date) - term_months
+from loantape2; -- null
+
+-- Product B --
+-- data overview --
+describe loantape2;
+select * from loantape2 limit 5;
+
+-- change data type
+UPDATE loantape2 SET interest_rate = CONCAT(FORMAT(interest_rate * 100, 2), '%');
+-- change date from text type to date type
+UPDATE loantape2
+SET date_key = STR_TO_DATE(NULLIF(date_key, ''), '%m/%d/%y'),
+    orig_date = STR_TO_DATE(NULLIF(orig_date, ''), '%m/%d/%y'),
+    maturity_date = IFNULL(STR_TO_DATE(NULLIF(maturity_date, ''), '%m/%d/%y'), maturity_date),
+    chargeoff_date = STR_TO_DATE(NULLIF(chargeoff_date, ''), '%m/%d/%y');
+
+-- check status
+select DISTINCT `status`
+FROM loantape2;
+
+-- FICO
+select MIN(FICO), MAX(FICO), AVG(FICO)
+FROM loantape2;
+
+-- DaysPastDue
+select MIN(days_past_due), MAX(days_past_due), AVG(days_past_due)
+FROM loantape2;
+
+--  ChargeOffAmount
+select MIN(chargeoff_amount), MAX(chargeoff_amount), AVG(chargeoff_amount)
+FROM loantape2
+where chargeoff_amount IS NOT NULL;
+
+-- check if loan ID are unique
+select count(distinct loan_id) = count(*)
+from loantape2 B;-- all unique
+
+-- make sure DateKey are all the same or after OriginationDate
+select * from loantape2 where date_key < orig_date;-- null
+
+-- drop NA row
+delete from loantape2
+where orig_date is null;
+
+-- Product C --
+-- data overview --
+describe loantape3;
+select * from loantape3 limit 5;
+
+-- change date from text type to date type
+UPDATE loantape3
+SET issue_d = STR_TO_DATE(NULLIF(issue_d, ''), '%m/%d/%y'),
+    last_pymnt_d = STR_TO_DATE(NULLIF(last_pymnt_d, ''), '%m/%d/%y'),
+    charge_off_d = STR_TO_DATE(NULLIF(charge_off_d, ''), '%m/%d/%y');
+-- remove " months" in term
+UPDATE loantape3
+SET term = REPLACE(term, ' months', '')
+WHERE term LIKE '% months';
+
+-- check if loan ID are unique
+select  count(distinct id) = count(*)
+from loantape3;-- all unique
+
+-- check status
+select distinct loan_status
+from loantape3;
+
+-- FICO
+select min(fico_range_low), max(fico_range_low), avg(fico_range_low)
+from loantape3;
+
+-- DaysPastDue
+select MIN(charge_off_mob), MAX(charge_off_mob), AVG(charge_off_mob)
+from loantape3; -- charge_off_mob < 0
+
+-- charge off dates
+select *
+from loantape3
+where charge_off_mob <0; -- charge off dates are wrong, drop these rows
+delete from loantape3
+where charge_off_mob < 0;
+
+-- make sure last payment date are all the same or after issue date
+select id
+from loantape3
+where issue_d in (select id
+ from loantape3
+ where last_pymnt_d < issue_d);-- null
+
+
+-- origination characteristics, as seen on Tableau story P2:
+-- 1. total loan amount
+select sum(LoanAmount) from loantape1;
+select sum(loan_amount) from loantape2;
+select sum(loan_amnt) from loantape3;
+-- 2. number of loan amount
+select count(LoanAmount) from loantape1;
+select count(loan_amount) from loantape2;
+select count(loan_amnt) from loantape3;
+-- 3. average loan amount
+select avg(LoanAmount) from loantape1;
+select avg(loan_amount) from loantape2;
+select avg(loan_amnt) from loantape3;
+-- 4. weighted average FICO
+select sum(FICO * LoanAmount) / SUM(LoanAmount) from loantape1;
+select sum(FICO * loan_amount) / SUM(loan_amount) from loantape2;
+select sum(fico_range_low * loan_amnt) / SUM(loan_amnt) from loantape3;
+-- 5. average principal balance
+select avg(OutstandingPrincipalBalance) from loantape1 where `Status` = "Current";
+select avg(prin_outstanding) from loantape2 where `status` = "Current";
+select avg(out_prncp) from loantape3 where fico_range_low = "Current";
+-- 6. Weighted Average Loan Term (months)
+select sum(LoanTermMonths * LoanAmount) / SUM(LoanAmount) from loantape1;
+select sum(term_months * loan_amount) / SUM(loan_amount) from loantape2;
+select sum(term * loan_amnt) / SUM(loan_amnt) from loantape3;
+-- 7. prepayment
+-- outstanding balance = 0, status = Fully paid, total received = loan amount, (last payment – origination data) < term month
+-- Product A
+-- Product B
+select 100 * COUNT(case when prin_outstanding = 0 and `status` = 'Repaid'
+                and timestampdiff(month, orig_date, date_key) < term_months
+                then 1 end) / COUNT(*) as percentage
+from loantape2;
+-- Product C
+select 100 * COUNT(case when loan_status = 'Fully Paid' and total_rec_prncp = loan_amnt 
+	and timestampdiff(month, issue_d, last_pymnt_d) < term then 1 end) / COUNT(*) as percentage
+from loantape3;
+
+-- aging FICO 
+-- Product A
+select ProductType, LoanID, avg(FICO), TIMESTAMPDIFF(MONTH, OriginationDate, DateKey) MonthSeasoned -- double checking product A, look at it as a time series?
+from loantape1
+group by ProductType, MonthSeasoned, LoanID
+union -- Product B
+select product_type ProductType, loan_id LoanID, avg(FICO), TIMESTAMPDIFF(MONTH, orig_date, date_key) MonthSeasoned -- double checking product A, look at it as a time series?
+from loantape2
+group by ProductType, MonthSeasoned, LoanID
+union -- Product C
+select product_type ProductType, id LoanID, avg(fico_range_low), TIMESTAMPDIFF(MONTH, issue_d, last_pymnt_d) MonthSeasoned -- double checking product A, look at it as a time series?
+from loantape3
+group by ProductType, MonthSeasoned, LoanID;
+
+-- Loss curve:
+-- Cumulative loss rate 
+SELECT ProductType, OriginationDate, running_total_ChargeOffAmount/running_total_LoanAmount as cumulative_loss_rate
+FROM (
+  SELECT
+    ProductType,
+    OriginationDate,
+    SUM(LoanAmount) OVER (ORDER BY OriginationDate) AS running_total_LoanAmount,
+    SUM(ChargeOffAmount) OVER (ORDER BY OriginationDate) AS running_total_ChargeOffAmount
+  FROM loantape1
+) subquery_alias
+union
+SELECT product_type as ProductType, orig_date as OriginationDate, running_total_ChargeOffAmount/running_total_LoanAmount as cumulative_loss_rate
+FROM (
+  SELECT
+    product_type,
+    orig_date,
+    SUM(loan_amount) OVER (ORDER BY orig_date) AS running_total_LoanAmount,
+    SUM(chargeoff_amount) OVER (ORDER BY orig_date) AS running_total_ChargeOffAmount
+  FROM loantape2
+) subquery_alias
+union
+SELECT product_type as ProductType, issue_d as OriginationDate, running_total_ChargeOffAmount/running_total_LoanAmount as cumulative_loss_rate
+FROM (
+  SELECT
+    product_type,
+    issue_d,
+    SUM(loan_amnt) OVER (ORDER BY issue_d) AS running_total_LoanAmount,
+    SUM(charge_off_amt) OVER (ORDER BY issue_d) AS running_total_ChargeOffAmount
+  FROM loantape3
+) subquery_alias;
+
+-- Cumulative loss seasoning, different with Tableau??
+SELECT ProductType, OriginationDate, running_total_ChargeOffAmount/running_total_LoanAmount as cumulative_loss_rate, TIMESTAMPDIFF(MONTH, OriginationDate, DateKey) MonthSeasoned
+FROM (
+  SELECT
+    ProductType,
+    OriginationDate, DateKey,
+    SUM(LoanAmount) OVER (ORDER BY OriginationDate) AS running_total_LoanAmount,
+    SUM(ChargeOffAmount) OVER (ORDER BY OriginationDate) AS running_total_ChargeOffAmount
+  FROM loantape1
+) subquery_alias
+union
+SELECT product_type as ProductType, orig_date as OriginationDate, running_total_ChargeOffAmount/running_total_LoanAmount as cumulative_loss_rate, TIMESTAMPDIFF(MONTH, orig_date, date_key) MonthSeasoned
+FROM (
+  SELECT
+    product_type,
+    orig_date, date_key,
+    SUM(loan_amount) OVER (ORDER BY orig_date) AS running_total_LoanAmount,
+    SUM(chargeoff_amount) OVER (ORDER BY orig_date) AS running_total_ChargeOffAmount
+  FROM loantape2
+) subquery_alias
+union
+SELECT product_type as ProductType, issue_d as OriginationDate, running_total_ChargeOffAmount/running_total_LoanAmount as cumulative_loss_rate, TIMESTAMPDIFF(MONTH, issue_d, last_pymnt_d) MonthSeasoned
+FROM (
+  SELECT
+    product_type,
+    issue_d, last_pymnt_d,
+    SUM(loan_amnt) OVER (ORDER BY issue_d) AS running_total_LoanAmount,
+    SUM(charge_off_amt) OVER (ORDER BY issue_d) AS running_total_ChargeOffAmount
+  FROM loantape3
+) subquery_alias;
+
+-- loss rate vs. months seasoned (not cumulative)
+SELECT ProductType, ChargeOffAmount / LoanAmount as LossRate, TIMESTAMPDIFF(MONTH, OriginationDate, DateKey) MonthSeasoned
+FROM loantape1
+union
+SELECT product_type as ProductType, chargeoff_amount / loan_amount as LossRate, TIMESTAMPDIFF(MONTH, orig_date, date_key) MonthSeasoned
+FROM loantape2
+union
+SELECT product_type as ProductType, charge_off_amt / loan_amnt as LossRate, TIMESTAMPDIFF(MONTH, issue_d, last_pymnt_d) MonthSeasoned
+FROM loantape3;
