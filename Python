@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Apr 12 00:26:55 2023
+
+@author: chen
+"""
+
+#### Import data
+import pandas as pd
+import numpy as np
+
+loantape1 = pd.read_csv('%%%')
+print(loantape1.dtypes)
+print(loantape1.head())
+
+for col in loantape1.columns:
+    if col.find(' ') != -1:
+        print(f"Column '{col}' contains a space.")
+    else:
+        print(f"Column '{col}' does not contain a space.") #check for spaces in column name
+     
+loantape1 = loantape1.rename(columns={'Maturity Date' : 'MaturityDate'}) #remove for spaces in column name
+
+loantape2 = pd.read_csv('%%%')
+print(loantape2.dtypes)
+print(loantape2.head())
+loantape2.columns = loantape1.columns
+
+loantape3 = pd.read_csv('%%%')
+print(loantape3.dtypes)
+print(loantape3.head())
+loantape3.columns = ('LoanID', 'OriginationDate', 'LastPaymentDate', 'LoanAmount', 'LoanTermMonths', 'InterestRate', 
+                      'MonthlyPayment', 'Status', 'FICO', 'Recoveries', 'OutstandingPrincipalBalance', 'TotalRecPrncp',
+                      'ChargeOffAmount', 'ChargeOffDate', 'ChargeOffMob', 'ProductType')
+
+#### Data Cleaning
+loantape1['DateKey'] = pd.to_datetime(loantape1['DateKey'])
+loantape1['OriginationDate'] = pd.to_datetime(loantape1['OriginationDate'])
+loantape1['MaturityDate'] = pd.to_datetime(loantape1['MaturityDate'])
+print(loantape1.dtypes)
+
+loantape1['LoanAmount']= loantape1['LoanAmount'].str.replace('$', '').str.replace(',', '').astype(float)
+print(loantape1['LoanAmount'].head())
+loantape1['InterestRate'] = loantape1['InterestRate'].str.replace('%', '').astype(float) / 100
+print(loantape1['InterestRate'].head())
+loantape1['OutstandingPrincipalBalance']= loantape1['OutstandingPrincipalBalance'].str.replace('$', '').str.replace(',', '').astype(float).round(2)
+print(loantape1['OutstandingPrincipalBalance'].head())
+loantape1['ChargeOffDate'] = pd.to_datetime(loantape1['ChargeOffDate'], errors='coerce')
+loantape1['MonthsSeasoned'] = (loantape1['DateKey'] - loantape1['OriginationDate']).dt.days.divmod(30)[0] + 1
+loantape1['ChargeOffMob'] = (loantape1['ChargeOffDate'] - loantape1['OriginationDate']).dt.days.divmod(30)[0]
+loantape1['Recoveries'] = 0
+print(loantape1.isna().any())
+
+loantape2['DateKey'] = pd.to_datetime(loantape2['DateKey'])
+loantape2['OriginationDate'] = pd.to_datetime(loantape2['OriginationDate'])
+loantape2['MaturityDate'] = pd.to_datetime(loantape2['MaturityDate'], errors='coerce')
+loantape2['MonthlyPayment']= loantape2['MonthlyPayment'].str.replace('$', '').str.replace(',', '').astype(float)
+print(loantape2['MonthlyPayment'].head())
+loantape2['OutstandingPrincipalBalance']= loantape2['OutstandingPrincipalBalance'].str.replace('$', '').str.replace(',', '').astype(float).round(2)
+print(loantape2['OutstandingPrincipalBalance'].head())
+loantape2['ChargeOffDate'] = pd.to_datetime(loantape2['ChargeOffDate'], errors='coerce')
+loantape2['MonthsSeasoned'] = (loantape2['DateKey'] - loantape2['OriginationDate']).dt.days.divmod(30)[0] + 1
+loantape2['ChargeOffMob'] = (loantape2['ChargeOffDate'] - loantape2['OriginationDate']).dt.days.divmod(30)[0]
+loantape2['Recoveries'] = 0
+x = loantape2[loantape2['OriginationDate'].isna()] # check na data
+loantape2['MaturityDate'].isna().sum() == loantape2['OriginationDate'].isna().sum() # same amount of na in origination and maturity data
+print(loantape2.isna().any())
+loantape2 = loantape2.dropna(subset=['OriginationDate'])
+print(loantape2.isna().any())
+
+loantape3['InterestRate'] = loantape3['InterestRate']/ 100
+print(loantape1['InterestRate'].head())
+loantape3['OriginationDate'] = pd.to_datetime(loantape3['OriginationDate'])
+loantape3['LastPaymentDate'] = pd.to_datetime(loantape3['LastPaymentDate'])
+loantape3['LoanTermMonths']= loantape3['LoanTermMonths'].str.replace(' months', '').astype(int)
+print(loantape3['LoanTermMonths'].head())
+loantape3['ChargeOffDate'] = pd.to_datetime(loantape3['ChargeOffDate'])
+loantape3['MonthsSeasoned'] = (loantape3['LastPaymentDate'] - loantape3['OriginationDate']).dt.days.divmod(30)[0] + 1
+print(loantape3.isna().any())
+
+## remove duplicates in Status
+dfs = [loantape1, loantape2, loantape3]
+for df in dfs:
+    # remove spaces from 'Status' column
+    df['Status'] = df['Status'].str.lstrip()
+    # change 'Written Off' to 'Charged Off'
+    df['Status'] = df['Status'].replace('Written Off', 'Charged Off')
+    # print unique 'Status' values
+    print(list(set(df['Status'])))
+    
+# When 'OutstandingPrincipalBalance' = 0, 'Repaid' = 'Fully Paid' or else, ‘Partially Paid’
+update_b = lambda row: 'Fully Paid' if row['OutstandingPrincipalBalance'] == 0 and row['Status'] == 'Repaid' else ('Partially Paid' if row['Status'] == 'Repaid' else row['Status'])
+loantape2['Status'] = loantape2.apply(update_b, axis=1)
+print(list(set(loantape2['Status'])))
+
+loantape1['GrossLossRate'] = loantape1['ChargeOffAmount'] / loantape1['LoanAmount']
+loantape1['NetLossRate'] = (loantape1['ChargeOffAmount'] - loantape1['Recoveries']) / loantape1['LoanAmount']
+
+loantape2['GrossLossRate'] = loantape2['ChargeOffAmount'] / loantape2['LoanAmount']
+loantape2['NetLossRate'] = (loantape2['ChargeOffAmount'] - loantape2['Recoveries']) / loantape2['LoanAmount']
+
+loantape3['GrossLossRate'] = loantape3['ChargeOffAmount'] / loantape3['LoanAmount']
+loantape3['NetLossRate'] = (loantape3['ChargeOffAmount'] - loantape3['Recoveries']) / loantape3['LoanAmount']
+
+#### Origination characteristic
+## total loan amount
+print(sum(loantape1['LoanAmount']), sum(loantape2['LoanAmount']), sum(loantape3['LoanAmount']))
+## count loan numbers
+print(len(loantape1['LoanAmount']), len(loantape2['LoanAmount']), len(loantape3['LoanAmount']))
+# average loan amount
+print(np.mean(loantape1['LoanAmount']), np.mean(loantape2['LoanAmount']), np.mean(loantape3['LoanAmount']))
+## weighted average FICO
+dfs = [loantape1, loantape2, loantape3]
+for df in dfs:
+    FICO = [df['FICO'] for row in df if df['FICO'] is not None]
+    LoanAmount = [df['LoanAmount'] for row in df if df['LoanAmount'] is not None]
+    weighted_average_FICO = np.average(FICO, weights=LoanAmount)
+    print(weighted_average_FICO)
+## weighted average outstanding principal balance
+dfs = [loantape1, loantape2, loantape3]
+for df in dfs:
+    OutstandingPrincipalBalance = [df['OutstandingPrincipalBalance'] for row in df if df['OutstandingPrincipalBalance'] is not None]
+    LoanAmount = [df['LoanAmount'] for row in df if df['LoanAmount'] is not None]
+    weighted_average_OutstPrpBl = np.average(OutstandingPrincipalBalance, weights=LoanAmount)
+    print(np.mean(weighted_average_OutstPrpBl)) 
+## weighted average loan terms
+dfs = [loantape1, loantape2, loantape3]
+for df in dfs:
+    LoanTermMonths = [df['LoanTermMonths'] for row in df if df['LoanTermMonths'] is not None]
+    LoanAmount = [df['LoanAmount'] for row in df if df['LoanAmount'] is not None]
+    weighted_average_LoanTermMonths = np.average(LoanTermMonths, weights=LoanAmount)
+    print(weighted_average_LoanTermMonths)
+## prepayment
+# product A
+loantape1['DateKey'] = pd.to_datetime(loantape1['DateKey'])
+loantape1['MaturityDate'] = pd.to_datetime(loantape1['MaturityDate'])
+
+conditions = (loantape1['OutstandingPrincipalBalance'] == 0) & \
+             (loantape1['Status'] == 'Current') & \
+             (loantape1['DateKey'] < loantape1['MaturityDate'])
+             
+percentage1 = (len(loantape1.loc[conditions]) / len(loantape1)) * 100
+print(percentage1)
+# product B
+loantape2['DateKey'] = pd.to_datetime(loantape2['DateKey'])
+loantape2['MaturityDate'] = pd.to_datetime(loantape2['MaturityDate'])
+
+conditions = (loantape2['OutstandingPrincipalBalance'] == 0) & \
+             ((loantape2['Status'] == 'Fully Paid') |
+             (loantape2['Status'] == 'Partially Paid')) & \
+             (loantape2['DateKey'] < loantape2['MaturityDate'])
+             
+percentage2 = (len(loantape2.loc[conditions]) / len(loantape2)) * 100
+print(percentage2)
+# product C
+loantape33 = loantape3
+loantape33['delta'] = (loantape33['LastPaymentDate'] - loantape33['OriginationDate']).apply(lambda x: x / np.timedelta64(1, 'M'))
+conditions = (loantape33['delta'] <= 36).all()
+conditions = (loantape33['delta'] <= 36).any()
+loantape33['delta'] = round(loantape33['delta'])
+print(loantape33['delta'])  # calculation loan term nonths
+
+loantape33['OriginationDate'] = pd.to_datetime(loantape33['OriginationDate'])
+loantape33['LastPaymentDate'] = pd.to_datetime(loantape33['LastPaymentDate'])
+
+conditions = (loantape33['OutstandingPrincipalBalance'] == 0) & \
+             (loantape33['Status'] == 'Fully Paid') & \
+             (loantape33['LoanAmount'] == loantape33['TotalRecPrncp']) & \
+             (loantape33['delta'] < loantape33['LoanTermMonths'])
+     
+percentage3 = (len(loantape33.loc[conditions]) / len(loantape33)) * 100
+print(percentage3)
+
+# correlation
+correlation_table_1 = loantape1.corr().round(2)
+correlation_table_2 = loantape2.corr().round(2)
+correlation_table_3 = loantape3.corr().round(2)
+
+
+
